@@ -1,0 +1,73 @@
+// Encabezado (Libraries)
+#include <avr/io.h>
+#include <avr/interrupt.h>
+
+uint8_t counter_10ms;
+
+/****************************************/
+// Function prototypes
+void setup();
+
+/****************************************/
+// Main Function
+int main(void) {
+	uint8_t contador = 0;
+
+	setup(); // configurar MCU
+	while (1) {
+		// Botón de incremento (conectado a PB0)
+		if (!(PINB & (1 << PB0))) {   // botón presionado (activo a 0)
+			if (contador == 255 ) {    // Si llega al máximo, se reinicia
+				contador = 0;
+				} else {
+				contador++;           // Incrementa normalmente
+			}
+			// Espera a que se libere el botón
+			while (!(PINB & (1 << PB0)));
+		}
+
+		// Botón de decremento (conectado a PB1)
+		if (!(PINB & (1 << PB1))) {   // botón presionado (activo a 0)
+			if (contador == 0) {      // Si está en 0, se pasa al máximo
+				contador = 255;
+				} else {
+				contador--;           // Decrementa normalmente
+			}
+			// Espera a que se libere el botón
+			while (!(PINB & (1 << PB1)));
+		}
+
+		// Actualiza PB4 (bit 0 del contador)
+		if (contador & 0x01)
+		PORTB |= (1 << PB4);
+		else
+		PORTB &= ~(1 << PB4);
+
+		// Actualiza PB5 (bit 1 del contador)
+		if (contador & 0x02)
+		PORTB |= (1 << PB5);
+		else
+		PORTB &= ~(1 << PB5);
+
+		// Actualizar la salida en PORTC para PC0 a PC5 (bits 2 a 7 del contador)
+		PORTC = (PORTC & ~0x3F) | ((contador >> 2) & 0x3F);
+	}
+	
+	return 0;
+}
+
+/****************************************/
+// NON-Interrupt subroutines
+void setup()
+{
+	// Configurar botones: PB0 y PB1 como entradas con resistencias pull-up activadas
+	DDRB &= ~((1 << PB0) | (1 << PB1));
+	PORTB |= (1 << PB0) | (1 << PB1);
+
+	// Configurar salidas:
+	// PB4 y PB5 como salidas para los dos bits menos significativos del contador
+	DDRB |= (1 << PB4) | (1 << PB5);
+	// PC0 a PC5 como salidas para los 6 bits restantes del contador
+	DDRC |= 0x3F;  // 0x3F = 0b00111111
+}
+/****************************************/
