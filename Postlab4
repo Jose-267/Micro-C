@@ -1,0 +1,97 @@
+#define F_CPU 16000000
+#include <avr/io.h>
+#include <avr/interrupt.h>
+
+// Definición de variables globales
+uint8_t btn;
+uint8_t display = 0;
+uint8_t m_d[2] = {0};
+uint8_t cont_leds = 0;
+uint8_t tabla[] = {0x7F, 0x12, 0xBC, 0xB6, 0xD2, 0xE6, 0xEE, 0x32, 0xFE, 0xF6, 0xFA, 0xCE, 0x6C, 0x9E, 0xEC, 0xE8};
+
+// Función de inicialización del ADC
+void initADC() {
+    ADMUX = (1 << REFS0) | (1 << ADLAR) | (1 << MUX1);  
+    ADCSRA = (1 << ADEN) | (1 << ADSC) | (1 << ADATE) | (1 << ADIE) | (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0);
+    DIDR0 = (1 << ADC2D);
+}
+// Interrupción del ADC cuando la conversión se completa
+ISR(ADC_vect) {
+    uint8_t adc_value = ADCH;
+    m_d[0] = tabla[(adc_value >> 4) & 0x0F]; 
+    m_d[1] = tabla[adc_value & 0x0F];      
+	
+	// Comparar el valor del ADC con el contador de LEDs
+	if (adc_value > cont_leds) {
+		PORTB |= (1 << PB3); 
+		} else {
+		PORTB &= ~(1 << PB3);
+	}  
+}
+// Interrupción del Timer2
+ISR(TIMER2_OVF_vect) {
+    PORTB &= ~0x07;
+    // Control de multiplexado para mostrar los dos dígitos en los displays
+    if(display == 0) {
+        PORTD = m_d[0]; 
+        PORTB |= (1 << PB0); // Activar el primer display (PB0)
+        display = 1;
+    } else if (display == 1){
+        PORTD = m_d[1];   
+        PORTB |= (1 << PB1);// Activar el segundo display (PB1)
+        display = 2;
+    }else{
+		PORTD = cont_leds;
+		PORTB |= (1 << PB2);// Activar los leds (PB3)
+		display = 0;
+	}
+}
+
+// Interrupción de cambios en los pines del puerto C (PINC)
+ISR(PCINT1_vect) {
+	TCNT0 = 131;  // Inicializar el contador de Timer0 para un retraso
+	btn = PINC & 0x03;  // Leer los dos primeros bits de los botones (PC0, PC1)
+	TCCR0B = (1 << CS02) | (1 << CS00);  // Configurar el Timer0 con prescaler 1024
+	PCICR &= ~(1 << PCIE1);  // Deshabilitar la interrupción del pin (PCINT1) temporalmente
+}
+
+// Interrupción del Timer0 
+ISR(TIMER0_OVF_vect) {
+    TCCR0B = 0;
+    uint8_t btn_v = PINC & 0x03;
+    // Si el botón PC0 es presionado, incrementar el contador de LEDs
+    if (!(btn_v & (1 << PC0))) cont_leds++;
+    // Si el botón PC1 es presionado, decrementar el contador de LEDs
+    if (!(btn_v & (1 << PC1))) cont_leds--;
+
+    PCICR |= (1 << PCIE1);
+}
+
+int main(void) {
+	cli();
+	// Configuración de los temporizadores
+	TCCR2A = 0;
+	TCCR2B = (1 << CS22);  // Configurar Timer2 con prescaler de 64
+	TIMSK2 = (1 << TOIE2);  // Habilitar la interrupción por desbordamiento del Timer2
+	TCNT2 = 130;  // Inicializar el valor del contador de Timer2
+
+	// Configuración de las interrupciones de los pines del puerto C (PCINT1)
+	PCICR |= (1 << PCIE1);
+	PCMSK1 |= (1 << PC0) | (1 << PC1);  // Habilitar interrupciones para los pines PC0 y PC1
+	TIMSK0 |= (1 << TOIE0);  // Habilitar la interrupción por desbordamiento del Timer0
+	
+	// Configuración de los puertos (salidas para displays y entradas para botones)
+	DDRD = 0xFF;   // Configurar PORTD como salida (para los displays)
+	DDRB |= 0x07;  // Configurar los pines PB0, PB1, PB2 como salida (control de displays)
+	DDRC &= ~0x03; // Configurar los pines PC0 y PC1 como entrada (botones)
+	PORTC |= 0x03; // Activar las resistencias pull-up para los pines PC0 y PC1
+	DDRB |= (1 << PB3);  // Configurar PB3 como salida para el LED de alarma
+	
+    initADC();
+    sei();
+
+    while(1) {
+		
+	}
+}
+
