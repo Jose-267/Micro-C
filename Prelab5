@@ -1,0 +1,84 @@
+----------------------Main-------------------------------------------
+#define F_CPU 16000000UL
+
+#include <avr/io.h>
+#include <util/delay.h>
+#include "servo.h"
+
+void ADC_init(void)
+{
+	ADMUX = (1 << REFS0); // AVcc como referencia
+	ADCSRA = (1 << ADEN) | (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0); // Prescaler 128
+}
+
+uint16_t ADC_read(uint8_t channel)
+{
+	ADMUX = (ADMUX & 0xF0) | (channel & 0x0F); // Seleccionar canal
+	ADCSRA |= (1 << ADSC); // Iniciar conversión
+	while (ADCSRA & (1 << ADSC)); // Esperar a que termine
+	return ADC;
+}
+
+int main(void)
+{
+	uint16_t adcValue;
+	uint16_t duty;
+
+	ADC_init();
+	servo_init();
+
+	while (1)
+	{
+		adcValue = ADC_read(0); // Leer desde canal A0
+
+		// Mapear 0–1023 a 1000–5000 (1ms a 2.5ms)
+		duty = ((uint32_t)adcValue * 4000UL) / 1023UL + 1000UL;
+
+		servo_setDuty(duty);
+
+		_delay_ms(20); // Retardo entre lecturas
+	}
+}
+
+-------------------------------Servo.c--------------------------------------------
+#include <avr/io.h>
+#include "servo.h"
+
+void servo_init(void)
+{
+	// Pin OC1A (PB1) como salida
+	DDRB |= (1 << DDB1);
+
+	// Fast PWM con TOP en ICR1
+	TCCR1A = (1 << COM1A1) | (1 << WGM11);
+	TCCR1B = (1 << WGM13) | (1 << WGM12) | (1 << CS11); // Prescaler 8
+
+	// TOP = 40000 -> 20ms (50Hz) con F_CPU=16MHz y prescaler=8
+	ICR1 = 40000;
+
+	// Pulso inicial mínimo
+	OCR1A = SERVO_MIN;
+}
+
+void servo_setDuty(uint16_t duty)
+{
+	if (duty < SERVO_MIN) duty = SERVO_MIN;
+	if (duty > SERVO_MAX) duty = SERVO_MAX;
+	OCR1A = duty;
+}
+
+
+----------------------------servo.h---------------------------------
+
+#ifndef PWM_SERVO_H
+#define PWM_SERVO_H
+
+#include <stdint.h>
+
+#define SERVO_MIN 1000
+#define SERVO_MAX 5000
+
+void servo_init(void);
+void servo_setDuty(uint16_t duty);
+
+#endif
