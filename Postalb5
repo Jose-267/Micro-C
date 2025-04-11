@@ -1,0 +1,216 @@
+------------------------------Main-------------------------------------
+#define F_CPU 16000000UL
+
+#include <avr/io.h>
+#include <util/delay.h>
+#include <stdint.h>
+#include "adc.h"
+#include "servo.h"
+#include "pwm_manual.h" 
+uint16_t ADC_read_avg(uint8_t channel, uint8_t samples)
+{
+	uint32_t sum = 0;
+	for (uint8_t i = 0; i < samples; i++)
+	{
+		sum += ADC_read(channel);
+	}
+	return sum / samples;
+}
+int main(void)
+{
+	uint16_t adc_val0, adc_val1, adc_val3;
+	uint16_t pwm_valA, pwm_valB;
+	uint8_t led_duty_manual;
+
+	ADC_init();
+	servo_init();
+	pwm_manual_init(); 
+
+	while (1)
+	{
+		adc_val0 = ADC_read_avg(0, 4);  
+		adc_val1 = ADC_read_avg(1, 4);
+		adc_val3 = ADC_read_avg(3, 4);
+
+		pwm_valB = ((uint32_t)adc_val0 * 4000UL) / 1023UL + 1000UL;
+		pwm_valA = ((uint32_t)adc_val1 * 4000UL) / 1023UL + 1000UL;
+
+		led_duty_manual = ((uint32_t)adc_val3 * 255UL) / 1023UL; 
+
+		servoB_setDuty(pwm_valB);
+		servoA_setDuty(pwm_valA);
+		pwm_manual_setDuty(led_duty_manual);  
+
+		_delay_ms(20);
+	}
+}
+
+---------------------------------------------servo.c------------------------------------------------
+#include "servo.h"
+#include <avr/io.h>
+
+#define SERVO_MIN 1000  // ~0.5 ms  
+#define SERVO_MAX 5000  // ~2.5 ms
+
+void servo_init(void)
+{
+	// Configurar PB1 (OC1A) y PB2 (OC1B) como salidas
+	DDRB |= (1 << DDB1) | (1 << DDB2);
+
+	// Timer1: Fast PWM con TOP en ICR1
+	TCCR1A = (1 << COM1A1) | (1 << COM1B1) | (1 << WGM11);
+	TCCR1B = (1 << WGM13) | (1 << WGM12);
+
+	// Prescaler = 8 => (CS11=1)
+	TCCR1B |= (1 << CS11);
+
+	// ICR1 = 40000 -> 20 ms (con prescaler=8 y F_CPU=16 MHz)
+	ICR1 = 40000;
+
+	// Duty inicial
+	OCR1A = SERVO_MIN;
+	OCR1B = SERVO_MIN;
+}
+
+void servoA_setDuty(uint16_t duty)
+{
+	if (duty < SERVO_MIN) duty = SERVO_MIN;
+	if (duty > SERVO_MAX) duty = SERVO_MAX;
+	OCR1A = duty;
+}
+
+void servoB_setDuty(uint16_t duty)
+{
+	if (duty < SERVO_MIN) duty = SERVO_MIN;
+	if (duty > SERVO_MAX) duty = SERVO_MAX;
+	OCR1B = duty;
+}
+----------------------------------------------servo.h--------------------------------------------------
+#ifndef SERVO_H_
+#define SERVO_H_
+
+#include <stdint.h>
+
+
+void servo_init(void);
+
+
+void servoA_setDuty(uint16_t duty);
+
+
+void servoB_setDuty(uint16_t duty);
+
+#endif 
+
+------------------------------------------adc.c--------------------------------------------------------
+
+#include "adc.h"
+#include <avr/io.h>
+
+void ADC_init(void)
+{
+	// Seleccionar AVcc como referencia (REFS0=1). Canal inicial = 0 por defecto.
+	ADMUX = (1 << REFS0);
+
+	// Habilitar ADC, prescaler=128 .
+	ADCSRA = (1 << ADEN) | (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0);
+
+	DIDR0 = (1 << ADC0D) | (1 << ADC1D);
+}
+
+uint16_t ADC_read(uint8_t channel)
+{
+	// Ajustar el canal en ADMUX 
+	ADMUX &= 0xF0;         
+	ADMUX |= (channel & 0x0F);
+
+	// Inicia la conversión
+	ADCSRA |= (1 << ADSC);
+
+	// Esperar a que finalice 
+	while (ADCSRA & (1 << ADSC));
+
+	// Retornar valor de 10 bits
+	return ADC;
+}
+---------------------------------------------------------adc.h---------------------------------------------
+#ifndef ADC_H_
+#define ADC_H_
+
+#include <stdint.h>
+
+ 
+void ADC_init(void);
+
+
+uint16_t ADC_read(uint8_t channel);
+
+#endif 
+---------------------------------------------pwm_manual.h------------------------------------------------------
+
+#ifndef PWM_MANUAL_H_
+#define PWM_MANUAL_H_
+
+#include <stdint.h>
+
+
+void pwm_manual_init(void);
+
+void pwm_manual_setDuty(uint8_t duty);
+
+#endif 
+
+
+
+--------------------------------------------pwm_manual.c--------------------------------------------------------------
+#include "pwm_manual.h"
+#include <avr/io.h>
+#include <avr/interrupt.h>
+
+volatile uint8_t pwm_counter = 0;
+volatile uint8_t pwm_duty = 0;
+
+void pwm_manual_init(void)
+{
+	// PD4 como salida
+	DDRD |= (1 << DDD4);
+
+	// Timer2 en modo CTC 
+	TCCR2A = (1 << WGM21);
+	TCCR2B = (1 << CS21);  // Prescaler = 8
+
+	// TOP del contador 
+	OCR2A = 62;  // ~5kHz con F_CPU = 16 MHz
+
+	// Habilitar interrupción por comparación
+	TIMSK2 |= (1 << OCIE2A);
+
+	sei();  // Habilitar interrupciones globales
+}
+
+void pwm_manual_setDuty(uint8_t duty)
+{
+	pwm_duty = duty;
+}
+
+ISR(TIMER2_COMPA_vect)
+{
+	if (pwm_counter == 0)
+	{
+		// Comienza el ciclo: salida alta
+		PORTD |= (1 << PORTD4);
+	}
+
+	pwm_counter++;
+
+	if (pwm_counter >= pwm_duty)
+	{
+		// Si se alcanza el duty, apagamos el LED
+		PORTD &= ~(1 << PORTD4);
+	}
+
+	if (pwm_counter >= 255)
+	{
+		pwm_counter = 0;
+	}
+}
