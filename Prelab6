@@ -1,0 +1,78 @@
+#include <avr/io.h>
+#include <avr/interrupt.h>
+
+void setup();
+void initUART();
+void writeChar(char caracter);
+uint8_t charToHex(char c);
+void Showleds(uint8_t valor);
+
+volatile uint8_t valorActual = 0;
+
+int main(void)
+{
+	setup();
+	writeChar('0');  // Enviar un valor inicial
+	while (1)
+	{
+		Showleds(valorActual); // Mostrar el valor en los LEDs continuamente
+	}
+}
+
+void setup(){
+	cli();          // Desactiva interrupciones globales
+	initUART();     // Configura UART
+
+	// Configura pines de salida para los LEDs:
+	// PD2–PD7 (6 bits) para bits 2–7 del valor
+	DDRD |= 0b11111100; // Configura PD2–PD7 como salida
+
+	// PB0–PB1 (2 bits) para bits 0–1 del valor
+	DDRB |= 0b00000011; // Configura PB0–PB1 como salida
+
+	sei();          // Activa interrupciones globales
+}
+
+void initUART(){
+	// Configurar pines TX (PD1) como salida y RX (PD0) como entrada
+	DDRD |= (1 << DDD1);   // PD1 = TX
+	DDRD &= ~(1 << DDD0);  // PD0 = RX
+
+	UCSR0A = 0;
+
+	// Habilita RX, TX y la interrupción por recepción
+	UCSR0B = (1 << RXCIE0) | (1 << RXEN0) | (1 << TXEN0);
+
+	// UART asincrónico, sin paridad, 1 stop bit, 8 bits de datos
+	UCSR0C = (1 << UCSZ01) | (1 << UCSZ00);
+
+	UBRR0 = 103; // Baud rate: 9600 @ 16MHz
+}
+
+void writeChar(char caracter){
+	while (!(UCSR0A & (1 << UDRE0))); // Espera a que el buffer esté libre
+	UDR0 = caracter; // Envía el carácter recibido por UART
+
+	valorActual = charToHex(UDR0);   
+}
+
+uint8_t charToHex(char c) {
+	// Convierte un carácter hexadecimal a su valor numérico
+	if (c >= '0' && c <= '9') return c - '0';  // Para caracteres '0'-'9'
+	else if (c >= 'a' && c <= 'f') return c - 'a' + 10;  // Para 'a'-'f'
+	else return 0; 
+}
+
+void Showleds(uint8_t valor) {
+	// Bits 0 y 1 → PB0 y PB1
+	PORTB = (PORTB & 0b11111100) | (valor & 0b00000011);  
+
+	// Bits 2 a 7 → PD2 a PD7 
+	PORTD = (PORTD & 0b00000011) | ((valor & 0b11111100) << 0);  
+}
+
+// Interrupción al recibir datos por UART
+ISR(USART_RX_vect){
+	char temporal = UDR0;  
+	writeChar(temporal);    
+}
