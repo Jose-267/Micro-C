@@ -1,0 +1,102 @@
+#define F_CPU 16000000UL
+#include <avr/io.h>
+#include <util/delay.h>
+#include <stdlib.h>
+#include <avr/interrupt.h>
+
+
+void setup();
+void initUART();
+void writeChar(char caracter);
+void writeString(char* texto);
+void Showleds(uint8_t valor);
+uint16_t readPot(); // Leer valor del potenciometro
+void showMenu(); // Mostrar el menú
+
+volatile uint8_t valorActual = 0;
+
+int main(void)
+{
+	setup();
+	showMenu();
+	char opcion;
+	while (1)
+	{
+		while (!(UCSR0A & (1 << RXC0))); // Espera a recibir un dato
+		opcion = UDR0;
+		if (opcion == '1') {
+			// Leer potenciómetro y mostrar valor
+			uint16_t potValue = readPot();
+			valorActual = potValue >> 2; // Escalar de 10-bit a 8-bit
+			writeString("Valor del potenciometro: ");
+			
+			char buffer[10];
+			itoa(valorActual, buffer, 10);
+			writeString(buffer);
+			writeString("\r\n");
+			showMenu();
+			} else if (opcion == '2') {
+			// Mostrar valor actual en LEDs
+			Showleds(valorActual);
+			writeString("Valor enviado a LEDs.\r\n");
+			showMenu();
+			} else {
+		}
+		_delay_ms(500);
+	}
+}
+
+void setup(){
+	cli();
+	initUART();
+
+	// Configura pines de salida para LEDs
+	DDRD |= 0b11111100;
+	DDRB |= 0b00000011;
+
+	// Configura el ADC
+	ADMUX = (1 << REFS0); // Referencia AVcc
+	ADCSRA = (1 << ADEN)  | (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0); // Habilita ADC y configura prescaler a 128
+
+	sei();
+}
+
+void initUART(){
+	DDRD |= (1 << DDD1);
+	DDRD &= ~(1 << DDD0);
+
+	UCSR0A = 0;
+	UCSR0B = (1 << RXEN0) | (1 << TXEN0);
+	UCSR0C = (1 << UCSZ01) | (1 << UCSZ00);
+	UBRR0 = 103; // 9600 baud
+}
+
+void writeChar(char caracter){
+	while (!(UCSR0A & (1 << UDRE0)));
+	UDR0 = caracter;
+}
+
+void writeString(char* texto){
+	for (uint8_t i = 0; *(texto+i) != '\0'; i++){
+		writeChar(*(texto+i));
+	}
+}
+
+void Showleds(uint8_t valor) {
+	PORTB = (PORTB & 0b11111100) | (valor & 0b00000011);
+	PORTD = (PORTD & 0b00000011) | ((valor & 0b11111100));
+}
+
+uint16_t readPot() {
+	ADMUX = (ADMUX & 0xF0) | 0; // Selecciona canal ADC0
+	ADCSRA |= (1 << ADSC); // Inicia la conversión
+	while (ADCSRA & (1 << ADSC)); // Espera a que termine
+	return ADC;
+}
+
+void showMenu() {
+	writeString("\r\n--- MENU ---\r\n");
+	writeString("1. Leer Potenciometro\r\n");
+	writeString("2. Enviar Ascii y mostrar en LEDs\r\n");
+	writeString("Seleccione una opcion: ");
+}
