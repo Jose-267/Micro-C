@@ -1,0 +1,58 @@
+adc.c
+
+#include "adc.h"
+#include <avr/io.h>
+
+void ADC_init(void)
+{
+	/* ---------- Referencia ---------- */
+	ADMUX = (1 << REFS0);              /* AVcc como referencia (REFS0=1) */
+
+	/* ---------- Prescaler ---------- */
+	/* F_CPU=16 MHz → 16 MHz/128 = 125 kHz, dentro del rango 50-200 kHz */
+	ADCSRA = (1 << ADEN)  |            /* habilita ADC            */
+	(1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0);  /* /128 */
+
+	/* ---------- Deshabilitar entrada digital en ADC0-ADC2 ---------- */
+	/* (los canales que usamos para los potenciómetros)               */
+	DIDR0 = (1 << ADC0D) | (1 << ADC1D) | (1 << ADC2D);
+}
+
+uint16_t ADC_read(uint8_t channel)
+{
+	/* Seleccionar canal (0-7) */
+	ADMUX = (ADMUX & 0xF0) | (channel & 0x0F);
+
+	/* Iniciar conversión */
+	ADCSRA |= (1 << ADSC);
+
+	/* Esperar a que termine (bit ADSC vuelve a 0) */
+	while (ADCSRA & (1 << ADSC));
+
+	/* Resultado de 10 bits en registro ADC (ADCL + ADCH) */
+	return ADC;
+}
+
+
+adc.h
+
+#ifndef ADC_H_
+#define ADC_H_
+
+#include <stdint.h>
+
+/* Inicializa el convertidor A/D
+ * - Referencia: AVcc (5 V)
+ * - Resolución: 10 bits
+ * - Frecuencia del ADC ≈ 125 kHz  (prescaler = 128)
+ * - Deshabilita digital input en los canales que uses para ahorrar consumo
+ */
+void     ADC_init(void);
+
+/* Lee un canal (0-7) de forma bloqueante y
+ * devuelve el resultado de 10 bits (0-1023).
+ */
+uint16_t ADC_read(uint8_t channel);
+
+#endif /* ADC_H_ */
+
