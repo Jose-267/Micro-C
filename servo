@@ -1,0 +1,102 @@
+servo.c
+#include "servo.h"
+#include <avr/io.h>
+#include <util/atomic.h>
+
+/* ===== PARÁMETROS COMUNES ===== */
+#define SERVO_MIN_US   1000U      /* ≈1,0 ms  → -90°  (Timers 1 y 2) */
+#define SERVO_MAX_US   5000U      /* ≈2,5 ms  → +90°  (Timers 1 y 2) */
+
+/* ================================================================== */
+/* ===  TIMER 1  →  Servos A (PB1) y B (PB2)  ======================== */
+/* ================================================================== */
+
+/* 20 ms con prescaler 8 y F_CPU = 16 MHz → ICR1 = 40000              */
+#define T1_ICR1_TOP   40000U
+#define T1_TICK_US    0.5f        /* 1 tick = 0,5 µs con /8          */
+
+void servo_init(void)
+{
+	/* PB1 y PB2 como salidas                                         */
+	DDRB |= (1 << DDB1) | (1 << DDB2);
+
+	/* Cargar TOP y duty antes de habilitar PWM                       */
+	ATOMIC_BLOCK(ATOMIC_FORCEON) {
+		ICR1  = T1_ICR1_TOP;
+		OCR1A = SERVO_MIN_US;     /* pulso inicial 1,0 ms            */
+		OCR1B = SERVO_MIN_US;
+	}
+
+	/* Fast PWM, TOP=ICR1, sin invertir, prescaler = 8                */
+	TCCR1A = (1 << COM1A1) | (1 << COM1B1) | (1 << WGM11);
+	TCCR1B = (1 << WGM13)  | (1 << WGM12)  | (1 << CS11);  /* clk/8 */
+}
+
+/* -- util para escribir 16 bits de forma atómica (alto → bajo) ----- */
+static inline void write_ocr1(volatile uint16_t *reg, uint16_t val)
+{
+	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+		*((volatile uint8_t*)reg + 1) = (uint8_t)(val >> 8);  /* high */
+		*((volatile uint8_t*)reg    ) = (uint8_t)(val & 0xFF);/* low  */
+	}
+}
+
+void servoA_setDuty(uint16_t duty_us)
+{
+	if (duty_us < SERVO_MIN_US) duty_us = SERVO_MIN_US;
+	if (duty_us > SERVO_MAX_US) duty_us = SERVO_MAX_US;
+	write_ocr1(&OCR1A, duty_us);                 /* 1 µs = 1 tick     */
+}
+
+void servoB_setDuty(uint16_t duty_us)
+{
+	if (duty_us < SERVO_MIN_US) duty_us = SERVO_MIN_US;
+	if (duty_us > SERVO_MAX_US) duty_us = SERVO_MAX_US;
+	write_ocr1(&OCR1B, duty_us);
+}
+
+/* ================================================================== */
+/* ===  TIMER 2  →  Servo C (PD3)  ================================== */
+/* ================================================================== */
+
+/* Fast PWM 8 bit, TOP = 0xFF, prescaler = 1024                       */
+/* Periodo = 256 × 64 µs = 16,384 ms  (~61 Hz, válido para hobby)     */
+void servoC_init(void)
+{
+	DDRD |= (1 << DDD3);                                /* PD3 salida */
+
+	TCCR2A = (1 << COM2B1) | (1 << WGM21) | (1 << WGM20);  /* Fast PWM */
+	TCCR2B = (1 << CS22)  | (1 << CS21) | (1 << CS20);     /* /1024    */
+
+	servoC_setDuty(1500);                                /* centro    */
+}
+
+void servoC_setDuty(uint16_t duty_us)
+{
+	if (duty_us < SERVO_MIN_US) duty_us = SERVO_MIN_US;
+	if (duty_us > SERVO_MAX_US) duty_us = SERVO_MAX_US;
+
+	/* 1 cuenta = 64 µs → 1000-2500 µs = 16-40 cuentas               */
+	OCR2B = (uint8_t)((duty_us + 32U) / 64U);
+}
+
+
+
+
+
+servo.h
+#ifndef SERVO_H_
+#define SERVO_H_
+
+#include <stdint.h>
+
+/* ---------- Timer 1 (servos A y B) ---------- */
+void  servo_init(void);               /* inicializa Timer 1          */
+void  servoA_setDuty(uint16_t duty);  /* PB1 / OC1A  – D-9           */
+void  servoB_setDuty(uint16_t duty);  /* PB2 / OC1B  – D-10          */
+
+/* ---------- Timer 2 (servo C) --------------- */
+void  servoC_init(void);              /* inicializa Timer 2          */
+void  servoC_setDuty(uint16_t duty);  /* PD3 / OC2B  – D-3           */
+
+#endif
