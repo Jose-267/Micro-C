@@ -1,0 +1,152 @@
+/* ================================ main.c ================================ */
+#define F_CPU 16000000UL
+
+#include <avr/io.h>
+#include <util/delay.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <stdlib.h>               /* atoi() */
+
+#include "adc.h"
+#include "servo.h"
+#include "motor.h"
+#include "eeprom_layout.h"
+#include "preset.h"
+#include "uart.h"                 /* RX_BUF y funciones UART */
+
+/* ------------------- pines ------------------- */
+#define BTN_MODE_PIN PD2
+#define BTN_ACT_PIN  PD7
+#define LED_A_PIN    PB0          /* D8  */
+#define LED_B_PIN    PB3          /* D11 */
+
+/* ---- rangos de servos ---- */
+#define SERVO_A_MIN 3000U     /* µs 0/60 */
+#define SERVO_A_MAX 5000U
+#define SERVO_AB_MIN 1000U    /* servos B */
+#define SERVO_AB_MAX 5000U
+#define SERVO_C_MIN  1000U    /* servo C  */
+#define SERVO_C_MAX  2500U
+#define DEG_CLAMP(v)   ( (v)>180 ? 180 : (v) )
+
+/* ------------------- estado ------------------ */
+static uint8_t  mode = 0;                 /* 0 = manual, 1 = play, 2 = UART */
+static uint8_t  save_slot = 0, play_slot = 0;
+static volatile uint8_t blink_cnt = 0;
+
+/* valores vigentes para modo 2 */
+static uint16_t us_dir  = 3000;
+static uint16_t us_base = 1500;
+static uint16_t us_arm  = 1500;
+static uint8_t  duty_dc = 0;
+
+/* ======================================================================= */
+/* utilidades */
+static uint16_t adc_avg(uint8_t ch, uint8_t n)
+{
+	uint32_t s = 0;
+	for (uint8_t i=0;i<n;i++) s += ADC_read(ch);
+	return (uint16_t)(s / n);
+}
+static void leds_set(uint8_t m)
+{
+	PORTB &= ~((1<<LED_A_PIN)|(1<<LED_B_PIN));
+	if (m==0) PORTB |= (1<<LED_A_PIN);
+	else if (m==1) PORTB |= (1<<LED_B_PIN);
+	else            PORTB |= (1<<LED_A_PIN)|(1<<LED_B_PIN);
+}
+/* flancos */
+static bool edge_PD2(void){static uint8_t l=1;uint8_t n=(PIND&_BV(PD2))?1:0;bool e=l&&!n;l=n;return e;}
+static bool edge_PD7(void){static uint8_t l=1;uint8_t n=(PIND&_BV(PD7))?1:0;bool e=l&&!n;l=n;return e;}
+/* parpadeo no bloqueante */
+static void blink_start(uint8_t led,uint8_t t){blink_cnt=(led<<4)|(t*10);}
+static void blink_task(void){if(blink_cnt){uint8_t p=blink_cnt>>4;if(!(blink_cnt&1))PORTB^=(1<<p);blink_cnt--;}}
+/* ======================================================================= */
+
+int main(void)
+{
+	/* GPIO */
+	DDRB |= (1<<LED_A_PIN)|(1<<LED_B_PIN);
+	DDRD &= ~((1<<BTN_MODE_PIN)|(1<<BTN_ACT_PIN));
+	PORTD|=  (1<<BTN_MODE_PIN)|(1<<BTN_ACT_PIN);
+
+	leds_set(0);
+
+	/* periféricos */
+	ADC_init();  servo_init();  servoC_init();
+	motor_init(); uart_init(9600);
+
+	uint16_t a0,a1,a2,am, usA,usB,usC;
+
+	while (1)
+	{
+		if (edge_PD2()){ mode=(mode+1)%3; leds_set(mode); save_slot=play_slot=0; }
+
+		switch (mode)
+		{
+			/* ====================== MODO 0 ====================== */
+			case 0:
+			a0=adc_avg(0,4); a1=adc_avg(1,4); a2=adc_avg(2,4); am=adc_avg(3,4);
+			usB = (uint32_t)a0*4000/1023 + 1000;
+			usA = (uint32_t)a1*4000/1023 + 1000;
+			usC = (uint32_t)a2*1500/1023 + 1000;
+			servoB_setDuty(usB); servoA_setDuty(usA); servoC_setDuty(usC);
+			motor_set_from_adc(am);
+			if(edge_PD7()){ preset_save(save_slot); blink_start(LED_A_PIN,1); save_slot=(save_slot+1)%NUM_SLOTS; }
+			break;
+
+			/* ====================== MODO 1 ====================== */
+			case 1:
+			if(edge_PD7()){ preset_load(play_slot); blink_start(LED_B_PIN,play_slot+1); play_slot=(play_slot+1)%NUM_SLOTS; }
+			break;
+
+			/* ====================== MODO 2 ====================== */
+			case 2:
+			if(uart_available()){
+				char linea[RX_BUF]; uart_read_cmd(linea);
+				char id=linea[0]; int16_t v=atoi(&linea[1]);
+
+				switch(id){
+					/* servo A (0-60) ? 3000-5000 µs */
+					case 'd':
+					if(v<0)v=0; if(v>60)v=60;
+					us_dir = SERVO_A_MIN + (uint32_t)v*(SERVO_A_MAX-SERVO_A_MIN)/60;
+					break;
+					/* servo B (0-180) */
+					case 'b':{
+						uint16_t deg=DEG_CLAMP(v);
+						us_base = SERVO_AB_MIN + (uint32_t)deg*(SERVO_AB_MAX-SERVO_AB_MIN)/180;
+					}break;
+					/* servo C (0-180) 1000-2500 µs */
+					case 'e':{
+						uint16_t deg=DEG_CLAMP(v);
+						us_arm = SERVO_C_MIN + (uint32_t)deg*(SERVO_C_MAX-SERVO_C_MIN)/180;
+					}break;
+					/* motor -10 / 0 / +10 */
+					case 'p':
+					if(v<-10) v=-10; else if(v>10) v=10;
+					if(v==0){
+						duty_dc=0; PORTD&=~((1<<PD4)|(1<<PD5));
+						}else{
+						duty_dc = 25*(uint8_t)abs(v);      /* 25 × 10 ? 250 */
+						if(v>0){ PORTD|=(1<<PD4); PORTD&=~(1<<PD5);}  /* adelante */
+						else   { PORTD|=(1<<PD5); PORTD&=~(1<<PD4);}  /* reversa  */
+						OCR0A = duty_dc;
+					}
+					break;
+					default: break;
+				}
+				uart_write_str("OK\n");
+			}
+			/* aplica servos continuamente */
+			servoA_setDuty(us_dir);
+			servoB_setDuty(us_base);
+			servoC_setDuty(us_arm);
+			/* motor PWM ya ajustado arriba */
+			break;
+		}
+
+		blink_task();
+		_delay_ms(20);
+	}
+}
